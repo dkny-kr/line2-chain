@@ -1,91 +1,83 @@
-convertTime = (fmt_timestr) => {
-  if(fmt_timestr.match(/[0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
-    let _t = fmt_timestr.split(':');
-
-    let h = parseInt(_t[0]) * 60 * 60;
-    let m = parseInt(_t[1]) * 60;
-    let s = parseInt(_t[2]);
-
-    return h + m + s;
-  } else {
+const parse = json => {
+  let ret = [];
+  
+  if(typeof json.searchstntimetablebyfrcodeservice === 'undefined') {
+    throw `${json.result.message.replace(/\n| {2,}/g, ' ')} (${json.result.code})`;
     return null;
   }
-};
 
-getSchedule = (raw_data) => {
-  const data_set = raw_data.SearchSTNTimeTableByFRCodeService.row;
-  let ret = [];
+  try {
+    const rows = json.searchstntimetablebyfrcodeservice.row;
 
-  // RAW DATA 에서 필요한 데이터를 추출/병합
-  for(let raw_data of data_set) {
-    if(raw_data.TRAIN_NO.startsWith('2')) { // 본선데이터만 취급
-      let data = ret.find(d => (d.num === raw_data.TRAIN_NO));
+    for(const row of rows) {
+      if(parseInt(row.train_no) >= 2000) {
+        let _row = ret.find(d => (d.train_num === row.train_no));
 
-      if(typeof data === 'undefined') {
-        data = {
-          num: raw_data.TRAIN_NO,
-          _from: null,
-          dest: null,
-          prev: null,
-          next: null,
-          _lft_time: '00:00:00',
-          _arr_time: '00:00:00'
-        };
+        if(typeof _row === 'undefined') {
+            _row = {
+                train_num: row.train_no,
+                from: row.subwaysname,
+                dest: row.subwayename,
+                prev_train: -1,
+                next_train: -1,
+                _lft_time: 0,
+                _arr_time: 0
+            };
 
-        ret.push(data);
-      }
+            ret.push(_row);
+        }
 
-      // 출발지(임시)
-      data._from = raw_data.SUBWAYSNAME;
+        const _lft_sec = convertTimeString2Second(row.lefttime);
+        if(_lft_sec > 0) _row._lft_time = _lft_sec;
 
-      // 행선지(임시)
-      data.dest = raw_data.SUBWAYENAME;
-
-      // 출발시각(임시)
-      if(raw_data.LEFTTIME !== '00:00:00') {
-        data._lft_time = raw_data.LEFTTIME;
-      }
-
-      // 도착시각(임시)
-      if(raw_data.ARRIVETIME !== '00:00:00') {
-        data._arr_time = raw_data.ARRIVETIME;
+        const _arr_sec = convertTimeString2Second(row.arrivetime);
+        if(_arr_sec > 0) _row._arr_time = _arr_sec;
       }
     }
+
+    for(const row of ret) {
+      const _prev = ret.find(expect => {
+        const diff = row._lft_time - expect._arr_time;
+        return (diff > 0 && diff <= 120);
+      });
+      if(typeof _prev !== 'undefined') row.prev_train = _prev.train_num;
+
+      const _next = ret.find(expect => {
+        const diff = expect._lft_time - row._arr_time;
+        return (diff > 0 && diff <= 120);
+      });
+      if(typeof _next !== 'undefined') row.next_train = _next.train_num;
+    }
+
+    for(const row of ret) {
+      if(row.next_train !== -1) row.dest = (row.train_num % 2 === 0) ? '내선순환' : '외선순환';
+    }
+
+    for(const row of ret) {
+      delete row._arr_time;
+      delete row._lft_time;
+    }
+
+    return ret;
+  } catch(err) {
+    console.log('****** ERROR ******');
+    console.log(err);
+    return null;
   }
+}
 
-  // 추출된 데이터에서 이전/다음 열차번호 계산
-  for(let data of ret) {
-    // 이전
-    let _prev = ret.find(expect => {
-      let diff = convertTime(data._lft_time) - convertTime(expect._arr_time);
-      return (diff > 0 && diff <= 120);
-    });
+const convertTimeString2Second = time_string => {
+  if(time_string.match(/[0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
+    const _t = time_string.split(':');
+  
+    const h = parseInt(_t[0]) * 60 * 60;
+    const m = parseInt(_t[1]) * 60;
+    const s = parseInt(_t[2]);
 
-    if(typeof _prev !== 'undefined') {
-      data.prev = _prev.num;
-    }
-
-    // 다음
-    let _next = ret.find(expect => {
-      let diff = convertTime(expect._lft_time) - convertTime(data._arr_time);
-      return (diff > 0 && diff <= 120);
-    });
-
-    if(typeof _next !== 'undefined') {
-      data.next = _next.num;
-    }
+    return (h + m + s);
+  } else {
+    return -1;
   }
+}
 
-  // 행선지 수정
-  for(let data of ret) {
-    if(data.next !== null) {
-      if(parseInt(data.num) % 2 === 0) {
-        data.dest = '내선순환';
-      } else {
-        data.dest = '외선순환';
-      }
-    }
-  }
-
-  return ret;
-};
+exports.parse = parse;
